@@ -1,0 +1,230 @@
+%{
+package parser;
+
+import java.util.Hashtable;
+
+import event.*;
+import lexer.*;
+import token.*;
+import symbolTable.*;
+import reversePolish.*;
+%}
+
+%token UINTEGER
+%token STRING
+%token FUN
+%token ID
+%token CONSTANT
+%token RETURN
+%token IF
+%token THEN
+%token ELSE
+%token DO
+%token UNTIL
+%token COMPARATOR
+%token UI
+%token ENDOFFILE
+%token ASSIGN
+%token PRINT
+
+%%
+
+input : program ENDOFFILE
+;
+
+program : sentence
+	| program sentence
+;
+
+sentence : open_sentence
+	| closed_sentence
+	| error ';' {event.eventError("Error en sentencia",lex.getLineNumber(),"parser");}
+;
+
+open_sentence : if_sentence sentence   { event.eventNewRule("Sentencia IF",lex.getLineNumber());
+					 rp.endIf(); }
+	| if_sentence closed_sentence else_sentence_open  { event.eventNewRule("Sentencia IF",lex.getLineNumber()); 
+							rp.endElse(); }
+	| do_sentence closed_sentence until_sentence  { event.eventNewRule("Sentencia DO",lex.getLineNumber()); }
+	| IF condition closed_sentence ELSE open_sentence {event.eventError("Sentencia IF incompleta, falta THEN?",lex.getLineNumber(),"parser");}
+	| IF condition sentence {event.eventError("Sentencia IF incompleta, falta THEN?",lex.getLineNumber(),"parser");}
+;
+
+	
+closed_sentence : if_sentence closed_sentence else_sentence_closed  { event.eventNewRule("Sentencia IF",lex.getLineNumber()); 
+								rp.endElse(); }
+	| IF condition closed_sentence ELSE closed_sentence {event.eventError("Sentencia IF incompleta, falta THEN?",lex.getLineNumber(),"parser");}
+	| declaration
+	| execute
+	| '{' program '}'  { event.eventNewRule("Nuevo Bloque",lex.getLineNumber()); }
+	| '{' error {event.eventError("Error delimitadores de bloques",lex.getLineNumber(),"parser");}
+;
+
+if_sentence : IF condition THEN { rp.startIf(); event.eventWarning("inicio IF");}
+;
+
+else_sentence_open : ELSE open_sentence { rp.startElse();}
+;
+
+else_sentence_closed : ELSE closed_sentence { rp.startElse();}
+;
+
+do_sentence : DO {rp.startDo();}
+;
+
+until_sentence : UNTIL condition {rp.endDo();}
+
+
+/*declarations*/
+
+declaration : type declaration_names ';' { 	declarationType = $1.sval;
+						event.eventNewRule("Declaración",lex.getLineNumber()); }
+;
+
+declaration_names : ID { st.searchEntry($1.sval);}
+	| declaration_names ',' ID
+;
+
+type : UINTEGER 
+	| '^' FUN
+;
+
+/*execution*/
+
+execute : function  { event.eventNewRule("Funcion",lex.getLineNumber()); }
+	| assignment  { event.eventNewRule("Asignación",lex.getLineNumber()); }
+	| PRINT STRING ';' { event.eventNewRule("Print",lex.getLineNumber()); }
+	| PRINT error ';' {event.eventError("Error en sentencia Print",lex.getLineNumber(),"parser");}
+;
+
+function : type FUN ID '{' program RETURN '(' expression ')' '}' 
+	| FUN ID '{' program RETURN '(' expression ')' '}' {event.eventError("Funcion no tiene tipo de retorno",lex.getLineNumber(),"parser");}
+	| type FUN ID '{' program '}' {event.eventError("Funcion sin retorno",lex.getLineNumber(),"parser");}
+	| type FUN '{' program RETURN '(' expression ')' '}' {event.eventError("Funcion sin nombre",lex.getLineNumber(),"parser");}	
+	| type FUN ID error ';' {event.eventError("Funcion no delimitada",lex.getLineNumber(),"parser");}
+;
+
+/*assignment*/
+
+assignment : ID ASSIGN expression ';'  { rp.addItem(":="); event.eventWarning(":="); }
+	| ID '=' expression ';' {event.eventError("Asignación mal enunciada",lex.getLineNumber(),"parser");}
+;
+
+
+expression : expression '+' term {event.eventWarning("+");}
+	| expression '-' term
+	| term
+;
+
+term : term '*' factor
+	| term '/' factor
+	| factor
+;
+
+factor : ID  {event.eventWarning("ID " + $1.sval);}
+	| CONSTANT UI {event.eventWarning("CONSTANTE " + $1.sval);}
+	| CONSTANT error {event.eventError("Mala enunciación de constante",lex.getLineNumber(),"parser");}
+	| '(' expression ')'
+	| '^' ID  
+	| '(' ')' {event.eventError("Paréntesis vacíos",lex.getLineNumber(),"parser");}
+	| '(' error {event.eventError("Paréntesis impares",lex.getLineNumber(),"parser");}
+	| '^' error {event.eventError("Error en asignación",lex.getLineNumber(),"parser");}
+;
+
+/*control*/
+
+condition : '(' expression COMPARATOR expression ')'
+	| '(' expression COMPARATOR ')' {event.eventError("Error en condicción",lex.getLineNumber(),"parser");}
+	| '(' expression ')' {event.eventError("Error en condicción",lex.getLineNumber(),"parser");}
+	| '(' COMPARATOR ')' {event.eventError("Error en condicción",lex.getLineNumber(),"parser");}
+	| '(' COMPARATOR expression  ')' {event.eventError("Error en condicción",lex.getLineNumber(),"parser");}
+;
+
+%%
+
+
+Lexer lex ;
+Event event ;
+ReversePolish rp ;
+SymbolTable st ;
+String declarationType;
+
+public void loadLexer(Lexer lex){
+	this.lex = lex ;
+}
+
+public void loadRP(ReversePolish rp){
+	this.rp = rp ;
+}
+
+public void loadSymbolTable(SymbolTable st){
+	this.st= st ;
+}
+
+public void load(Lexer lex,SymbolTable st,ReversePolish rp, Event event){
+	this.st= st ;
+	this.rp = rp ;
+	this.lex = lex ;
+	this.event = event ;
+}
+
+void yyerror(String s){
+     System.out.println(s);
+}
+
+int yylex(){
+	if (lex.endOfFile()) return 0 ;
+	ReferenceToken tok = lex.getToken();
+
+	yylval = new ParserVal(tok);
+	if(tok== null)
+		return (Short) Conversor.get("ENDOFFILE");
+	Short s = (Short) Conversor.get(tok.getType());
+	event.eventNewToken(tok);
+	return s.intValue();
+} 
+
+static Hashtable<String, Short> Conversor;
+static {
+	Conversor = new Hashtable<String, Short>();
+	
+	Conversor.put(TableEntry.CONST_STRING, STRING);
+	Conversor.put(TableEntry.CONST_UINT, CONSTANT);
+	Conversor.put(TableEntry.IDENTIFIER, ID);
+	Conversor.put("if", IF);
+	Conversor.put("then",THEN);
+	Conversor.put( "else", ELSE);
+	Conversor.put( "do", DO);
+	Conversor.put( "until", UNTIL);
+	Conversor.put( "uint", UINTEGER);
+	Conversor.put( "ui" , UI);
+	Conversor.put( "fun", FUN);
+	Conversor.put( "return", RETURN);
+	Conversor.put( "do", DO);
+	Conversor.put( "print", PRINT);
+	Conversor.put( "<=", COMPARATOR);
+	Conversor.put( "==", COMPARATOR);
+	Conversor.put( ">=", COMPARATOR);
+	Conversor.put( "!=", COMPARATOR);
+	Conversor.put( "<", COMPARATOR);
+	Conversor.put( ">", COMPARATOR);
+	Conversor.put( "<>", COMPARATOR);
+	Conversor.put( ":=", ASSIGN) ;
+	Conversor.put( "ENDOFFILE",ENDOFFILE);
+	Conversor.put( ";", new Short((short) ';'));
+	Conversor.put( ",", new Short((short) ','));
+	Conversor.put( "=", new Short((short) '='));
+	Conversor.put( "{", new Short((short)'{'));
+	Conversor.put( "}", new Short((short)'}'));
+	Conversor.put( "(", new Short((short)'('));
+	Conversor.put( ")", new Short((short)')'));
+	Conversor.put( "+", new Short((short)'+'));
+	Conversor.put( "-", new Short((short)'-'));
+	Conversor.put( "*", new Short((short)'*'));
+	Conversor.put( "/", new Short((short)'/'));	
+	Conversor.put( "^", new Short((short)'^'));
+
+
+
+}
+
